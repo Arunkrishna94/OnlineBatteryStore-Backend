@@ -4,6 +4,7 @@ const cors = require("cors");
 const { Pool } = require("pg");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
+const productRoutes = require("./routes/products");
 
 const app = express();
 app.use(cors());
@@ -20,60 +21,6 @@ const pool = new Pool({
 
 const SECRET_KEY = process.env.JWT_SECRET || "root";
 
-// Register User
-app.post("/auth/register", async (req, res) => {
-    try {
-        console.log("Received Data:", req.body);
-        const { name, email, password, role = "user" } = req.body; // Default role as 'user'
-        if (!name || !email || !password) {
-            return res.status(400).json({ error: "All fields are required" });
-        }
-
-        const existingUser = await pool.query("SELECT id FROM users WHERE email = $1", [email]);
-        if (existingUser.rows.length > 0) {
-            return res.status(400).json({ error: "Email already registered" });
-        }
-
-        const salt = await bcrypt.genSalt(10);
-        const hashedPassword = await bcrypt.hash(password, salt);
-
-        const newUser = await pool.query(
-            "INSERT INTO users (name, email, password, role) VALUES ($1, $2, $3, $4) RETURNING id, name, email, role",
-            [name, email, hashedPassword, role]
-        );
-
-        res.status(201).json(newUser.rows[0]);
-    } catch (error) {
-        console.error("Error creating user:", error);
-        res.status(500).json({ error: "Internal Server Error" });
-    }
-});
-
-// Get All Users
-app.get("/users", async (req, res) => {
-    try {
-        const users = await pool.query("SELECT id, name, email, role, created_at FROM users");
-        res.json(users.rows);
-    } catch (error) {
-        console.error("Error fetching users:", error);
-        res.status(500).json({ error: "Internal Server Error" });
-    }
-});
-
-// Get User Role
-app.get("/auth/role", verifyToken, async (req, res) => {
-    try {
-        const user = await pool.query("SELECT role FROM users WHERE id = $1", [req.user.id]);
-        if (user.rows.length === 0) {
-            return res.status(404).json({ error: "User not found" });
-        }
-        res.json({ role: user.rows[0].role });
-    } catch (error) {
-        console.error("Error fetching role:", error);
-        res.status(500).json({ error: "Internal Server Error" });
-    }
-});
-
 // Middleware: Verify JWT Token
 function verifyToken(req, res, next) {
     const authHeader = req.headers["authorization"];
@@ -89,7 +36,7 @@ function verifyToken(req, res, next) {
     });
 }
 
-// Enforce Admin Role Middleware
+// Middleware: Enforce Admin Role
 function verifyAdmin(req, res, next) {
     if (req.user.role !== "admin") {
         return res.status(403).json({ error: "Admin access required" });
@@ -97,17 +44,28 @@ function verifyAdmin(req, res, next) {
     next();
 }
 
-// Delete User (Admin Only)
-app.delete("/users/:id", verifyToken, verifyAdmin, async (req, res) => {
+// Register User
+app.post("/auth/register", async (req, res) => {
     try {
-        const { id } = req.params;
-        const deletedUser = await pool.query("DELETE FROM users WHERE id = $1 RETURNING id", [id]);
-        if (deletedUser.rows.length === 0) {
-            return res.status(404).json({ error: "User not found" });
+        const { name, email, password, role = "user" } = req.body;
+        if (!name || !email || !password) {
+            return res.status(400).json({ error: "All fields are required" });
         }
-        res.json({ message: "User deleted successfully" });
+
+        const existingUser = await pool.query("SELECT id FROM users WHERE email = $1", [email]);
+        if (existingUser.rows.length > 0) {
+            return res.status(400).json({ error: "Email already registered" });
+        }
+
+        const hashedPassword = await bcrypt.hash(password, 10);
+        const newUser = await pool.query(
+            "INSERT INTO users (name, email, password, role) VALUES ($1, $2, $3, $4) RETURNING id, name, email, role",
+            [name, email, hashedPassword, role]
+        );
+
+        res.status(201).json(newUser.rows[0]);
     } catch (error) {
-        console.error("Error deleting user:", error);
+        console.error("Error creating user:", error);
         res.status(500).json({ error: "Internal Server Error" });
     }
 });
@@ -143,8 +101,47 @@ app.post("/auth/login", async (req, res) => {
     }
 });
 
+// Get All Users
+app.get("/users", async (req, res) => {
+    try {
+        const users = await pool.query("SELECT id, name, email, role, created_at FROM users");
+        res.json(users.rows);
+    } catch (error) {
+        console.error("Error fetching users:", error);
+        res.status(500).json({ error: "Internal Server Error" });
+    }
+});
+
+// Get User Role
+app.get("/auth/role", verifyToken, async (req, res) => {
+    try {
+        const user = await pool.query("SELECT role FROM users WHERE id = $1", [req.user.id]);
+        if (user.rows.length === 0) {
+            return res.status(404).json({ error: "User not found" });
+        }
+        res.json({ role: user.rows[0].role });
+    } catch (error) {
+        console.error("Error fetching role:", error);
+        res.status(500).json({ error: "Internal Server Error" });
+    }
+});
+
+// Delete User (Admin Only)
+app.delete("/users/:id", verifyToken, verifyAdmin, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const deletedUser = await pool.query("DELETE FROM users WHERE id = $1 RETURNING id", [id]);
+        if (deletedUser.rows.length === 0) {
+            return res.status(404).json({ error: "User not found" });
+        }
+        res.json({ message: "User deleted successfully" });
+    } catch (error) {
+        console.error("Error deleting user:", error);
+        res.status(500).json({ error: "Internal Server Error" });
+    }
+});
+
 // Product Routes
-const productRoutes = require("./routes/products");
 app.use("/api", productRoutes);
 
 // Connect to PostgreSQL

@@ -1,6 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const { Pool } = require("pg");
+const { authenticateUser, authorizeAdmin } = require("../middleware/authMiddleware");
 
 const pool = new Pool({
     user: process.env.DB_USER,
@@ -10,7 +11,7 @@ const pool = new Pool({
     port: process.env.DB_PORT,
 });
 
-// Get all products
+// ✅ Public Route - Get all products
 router.get("/products", async (req, res) => {
     try {
         const products = await pool.query("SELECT * FROM products");
@@ -21,7 +22,7 @@ router.get("/products", async (req, res) => {
     }
 });
 
-// Get product by ID
+// ✅ Public Route - Get product by ID
 router.get("/products/:id", async (req, res) => {
     try {
         const { id } = req.params;
@@ -36,8 +37,8 @@ router.get("/products/:id", async (req, res) => {
     }
 });
 
-// Create a new product
-router.post("/products", async (req, res) => {
+// ✅ Protected Route - Create a new product (Admins only)
+router.post("/products", authenticateUser, authorizeAdmin, async (req, res) => {
     try {
         const { name, description, price, stock } = req.body;
         if (!name || !price || stock === undefined) {
@@ -54,8 +55,8 @@ router.post("/products", async (req, res) => {
     }
 });
 
-// Update a product
-router.put("/products/:id", async (req, res) => {
+// ✅ Protected Route - Update a product (Admins only)
+router.put("/products/:id", authenticateUser, authorizeAdmin, async (req, res) => {
     try {
         const { id } = req.params;
         const { name, description, price, stock } = req.body;
@@ -73,8 +74,8 @@ router.put("/products/:id", async (req, res) => {
     }
 });
 
-// Delete a product
-router.delete("/products/:id", async (req, res) => {
+// ✅ Protected Route - Delete a product (Admins only)
+router.delete("/products/:id", authenticateUser, authorizeAdmin, async (req, res) => {
     try {
         const { id } = req.params;
         const deletedProduct = await pool.query("DELETE FROM products WHERE id = $1 RETURNING *", [id]);

@@ -4,7 +4,6 @@ const cors = require("cors");
 const { Pool } = require("pg");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
-const passport = require("passport");
 
 const app = express();
 app.use(cors());
@@ -19,158 +18,143 @@ const pool = new Pool({
     port: process.env.DB_PORT,
 });
 
-// Secret key for JWT
 const SECRET_KEY = process.env.JWT_SECRET || "root";
 
-// 1️⃣ Create User (Register)
-app.post("/users", async (req, res) => {
+// Register User
+app.post("/auth/register", async (req, res) => {
     try {
-        const { name, email, password } = req.body;
+        console.log("Received Data:", req.body);
+        const { name, email, password, role = "user" } = req.body; // Default role as 'user'
+        if (!name || !email || !password) {
+            return res.status(400).json({ error: "All fields are required" });
+        }
 
-        // Hash password
+        const existingUser = await pool.query("SELECT id FROM users WHERE email = $1", [email]);
+        if (existingUser.rows.length > 0) {
+            return res.status(400).json({ error: "Email already registered" });
+        }
+
         const salt = await bcrypt.genSalt(10);
         const hashedPassword = await bcrypt.hash(password, salt);
 
         const newUser = await pool.query(
-            "INSERT INTO users (name, email, password) VALUES ($1, $2, $3) RETURNING *",
-            [name, email, hashedPassword]
+            "INSERT INTO users (name, email, password, role) VALUES ($1, $2, $3, $4) RETURNING id, name, email, role",
+            [name, email, hashedPassword, role]
         );
 
-        res.json(newUser.rows[0]);
+        res.status(201).json(newUser.rows[0]);
     } catch (error) {
-        console.error(error);
-        res.status(500).json({ error: "Error creating user" });
+        console.error("Error creating user:", error);
+        res.status(500).json({ error: "Internal Server Error" });
     }
 });
 
-// 2️⃣ Get All Users
+// Get All Users
 app.get("/users", async (req, res) => {
     try {
-        const users = await pool.query("SELECT id, name, email, created_at FROM users");
+        const users = await pool.query("SELECT id, name, email, role, created_at FROM users");
         res.json(users.rows);
     } catch (error) {
-        console.error(error);
-        res.status(500).json({ error: "Error fetching users" });
+        console.error("Error fetching users:", error);
+        res.status(500).json({ error: "Internal Server Error" });
     }
 });
 
-// 3️⃣ Get Single User
-app.get("/users/:id", async (req, res) => {
+// Get User Role
+app.get("/auth/role", verifyToken, async (req, res) => {
     try {
-        const { id } = req.params;
-        const user = await pool.query("SELECT id, name, email, created_at FROM users WHERE id = $1", [id]);
-
+        const user = await pool.query("SELECT role FROM users WHERE id = $1", [req.user.id]);
         if (user.rows.length === 0) {
             return res.status(404).json({ error: "User not found" });
         }
-        res.json(user.rows[0]);
+        res.json({ role: user.rows[0].role });
     } catch (error) {
-        console.error(error);
-        res.status(500).json({ error: "Error fetching user" });
+        console.error("Error fetching role:", error);
+        res.status(500).json({ error: "Internal Server Error" });
     }
 });
 
-// 4️⃣ Update User
-app.put("/users/:id", async (req, res) => {
-    try {
-        const { id } = req.params;
-        const { name, email } = req.body;
-
-        const updatedUser = await pool.query(
-            "UPDATE users SET name = $1, email = $2 WHERE id = $3 RETURNING *",
-            [name, email, id]
-        );
-
-        res.json(updatedUser.rows[0]);
-    } catch (error) {
-        console.error(error);
-        res.status(500).json({ error: "Error updating user" });
-    }
-});
-
-// 5️⃣ Delete User
-app.delete("/users/:id", async (req, res) => {
-    try {
-        const { id } = req.params;
-        await pool.query("DELETE FROM users WHERE id = $1", [id]);
-
-        res.json({ message: "User deleted successfully" });
-    } catch (error) {
-        console.error(error);
-        res.status(500).json({ error: "Error deleting user" });
-    }
-});
-
-// 6️⃣ Login User (JWT Authentication)
-app.post("/login", async (req, res) => {
-    try {
-        const { email, password } = req.body;
-
-        // Check if user exists
-        const user = await pool.query("SELECT * FROM users WHERE email = $1", [email]);
-
-        if (user.rows.length === 0) {
-            return res.status(401).json({ error: "Invalid credentials" });
-        }
-
-        // Compare password with the hashed password in the DB
-        const isMatch = await bcrypt.compare(password, user.rows[0].password);
-
-        if (!isMatch) {
-            return res.status(401).json({ error: "Invalid credentials" });
-        }
-
-        // Generate JWT
-        const token = jwt.sign(
-            { id: user.rows[0].id, email: user.rows[0].email }, // Payload
-            SECRET_KEY, // Secret key
-            { expiresIn: "1h" } // Expiration time
-        );
-
-        res.json({ token });
-    } catch (error) {
-        console.error(error);
-        res.status(500).json({ error: "Error logging in" });
-    }
-});
-
-// Middleware to verify JWT Token
+// Middleware: Verify JWT Token
 function verifyToken(req, res, next) {
-    const token = req.headers["authorization"];
+    const authHeader = req.headers["authorization"];
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+        return res.status(403).json({ error: "Token required" });
+    }
 
-    if (!token) return res.status(403).json({ error: "Token required" });
-
-    jwt.verify(token.split(" ")[1], SECRET_KEY, (err, decoded) => {
+    const token = authHeader.split(" ")[1];
+    jwt.verify(token, SECRET_KEY, (err, decoded) => {
         if (err) return res.status(401).json({ error: "Invalid token" });
-        req.user = decoded; // Attach user info to request
+        req.user = decoded;
         next();
     });
 }
 
-// 7️⃣ Protected Route (only accessible with a valid JWT)
-app.get("/profile", verifyToken, async (req, res) => {
-    try {
-        const userId = req.user.id;
-        const user = await pool.query("SELECT id, name, email FROM users WHERE id = $1", [userId]);
+// Enforce Admin Role Middleware
+function verifyAdmin(req, res, next) {
+    if (req.user.role !== "admin") {
+        return res.status(403).json({ error: "Admin access required" });
+    }
+    next();
+}
 
-        if (user.rows.length === 0) {
+// Delete User (Admin Only)
+app.delete("/users/:id", verifyToken, verifyAdmin, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const deletedUser = await pool.query("DELETE FROM users WHERE id = $1 RETURNING id", [id]);
+        if (deletedUser.rows.length === 0) {
             return res.status(404).json({ error: "User not found" });
         }
-
-        res.json(user.rows[0]);
+        res.json({ message: "User deleted successfully" });
     } catch (error) {
-        console.error(error);
-        res.status(500).json({ error: "Error fetching user profile" });
+        console.error("Error deleting user:", error);
+        res.status(500).json({ error: "Internal Server Error" });
     }
 });
 
+// Login User
+app.post("/auth/login", async (req, res) => {
+    try {
+        const { email, password } = req.body;
+        if (!email || !password) {
+            return res.status(400).json({ error: "Email and password are required" });
+        }
+
+        const user = await pool.query("SELECT * FROM users WHERE email = $1", [email]);
+        if (user.rows.length === 0) {
+            return res.status(401).json({ error: "Invalid credentials" });
+        }
+
+        const isMatch = await bcrypt.compare(password, user.rows[0].password);
+        if (!isMatch) {
+            return res.status(401).json({ error: "Invalid credentials" });
+        }
+
+        const token = jwt.sign(
+            { id: user.rows[0].id, email: user.rows[0].email, role: user.rows[0].role },
+            SECRET_KEY,
+            { expiresIn: "1h" }
+        );
+
+        res.json({ token, role: user.rows[0].role });
+    } catch (error) {
+        console.error("Error logging in:", error);
+        res.status(500).json({ error: "Internal Server Error" });
+    }
+});
+
+// Product Routes
+const productRoutes = require("./routes/products");
+app.use("/api", productRoutes);
+
+// Connect to PostgreSQL
 pool.connect()
-    .then(() => console.log("✅ Connected to PostgreSQL from server.js"))
+    .then(() => console.log("✅ Connected to PostgreSQL"))
     .catch((err) => {
         console.error("❌ Database connection error:", err.message);
         process.exit(1);
     });
 
-// Start server
+// Start Server
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));

@@ -5,6 +5,7 @@ const { Pool } = require("pg");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const productRoutes = require("./routes/products");
+const cartRoutes = require("./routes/cartRoutes");
 
 const app = express();
 app.use(cors());
@@ -144,6 +145,8 @@ app.delete("/users/:id", verifyToken, verifyAdmin, async (req, res) => {
 // Product Routes
 app.use("/api", productRoutes);
 
+// Cart Routes
+app.use("/api/cart", cartRoutes); 
 // Connect to PostgreSQL
 pool.connect()
     .then(() => console.log("✅ Connected to PostgreSQL"))
